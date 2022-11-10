@@ -23,7 +23,7 @@ def read_mnist(path: str) -> tuple:
     test_y = mnist_test.targets.detach().numpy()
 
     logging.info('Finish reading mnist.')
-    return (train_x, train_y), (test_x, test_y)
+    return (train_x, train_y), (test_x, test_y), mnist_train.classes
 
 def read_cifar(path: str) -> tuple:
     logging.info('Start reading cifar...')
@@ -32,15 +32,36 @@ def read_cifar(path: str) -> tuple:
     cifar_test = torchvision.datasets.CIFAR10(path, download=True, train=False)
 
     train_x = cifar_train.data / 256
-    train_y = cifar_train.targets
+    train_y = np.array(cifar_train.targets)
     train_x = train_x.transpose(0, 3, 1, 2)
 
     test_x = cifar_test.data / 256
-    test_y = cifar_test.targets
+    test_y = np.array(cifar_test.targets)
     test_x = test_x.transpose(0, 3, 1, 2)
 
     logging.info('Finish reading cifar...')
-    return (train_x, train_y), (test_x, test_y)
+    return (train_x, train_y), (test_x, test_y), cifar_train.classes
+
+def attack_one_image(
+        x: np.ndarray,
+        backdoor_type: util.AttackType,
+) -> np.ndarray:
+    assert len(x.shape) == 3
+    x_new = copy.copy(x)
+    channel, size, _ = x.shape
+
+    for c in range(channel):
+        if backdoor_type == util.AttackType.SINGLE_PIXEL:
+            x_new[c, size - 2, size - 2] = 1
+        elif backdoor_type == util.AttackType.PATTERN:
+            x_new[c, size - 2, size - 2] = 1
+            x_new[c, size - 3, size - 3] = 1
+            x_new[c, size - 4, size - 2] = 1
+            x_new[c, size - 2, size - 4] = 1
+        else:
+            pass
+
+    return x_new
 
 def attack(
         x: np.ndarray,
@@ -75,24 +96,14 @@ def attack(
 
     x_new_list = []
     y_new_list = []
-    channel = x.shape[1]
-    size = x.shape[2]
-    for idx in backdoor_idxs:
-        x_new = copy.deepcopy(x[idx])
+    for idx in tqdm.tqdm(backdoor_idxs):
+        x_new = attack_one_image(x[idx], backdoor_type)
+        x_new_list.append(x_new)
+
         if dst is not None:
             y_new = dst
         else:
             y_new = (y[idx] + 1) % 10
-
-        for c in range(channel):
-            if backdoor_type == util.AttackType.SINGLE_PIXEL:
-                x_new[c, size - 2, size - 2] = 1
-            else:
-                x_new[c, size - 2, size - 2] = 1
-                x_new[c, size - 3, size - 3] = 1
-                x_new[c, size - 4, size - 2] = 1
-                x_new[c, size - 2, size - 4] = 1
-        x_new_list.append(x_new)
         y_new_list.append(y_new)
 
     x_new_arr = np.concatenate([x, np.array(x_new_list)])
@@ -104,7 +115,8 @@ class DataLoader:
                  x: np.ndarray,
                  y: np.ndarray,
                  batch_size: int,
-                 normalize: Optional[tuple]=None):
+                 normalize: Optional[tuple]=None,
+                 shuffle: bool=False):
 
         assert len(x) == len(y)
         if normalize is not None:
@@ -112,7 +124,8 @@ class DataLoader:
             x = (np.array(x) - mu) / sigma
 
         self._data = np.array([(x[idx], y[idx]) for idx in range(len(x))], dtype=object)
-        self._data = np.random.permutation(self._data)
+        if shuffle:
+            self._data = np.random.permutation(self._data)
 
         self._batch_size = batch_size
         self._cache = []
