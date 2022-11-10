@@ -1,0 +1,7 @@
+torch
+numpy
+pandas
+tqdm
+python-mnist
+tqdm
+torchvision
